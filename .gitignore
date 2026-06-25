@@ -1,0 +1,7 @@
+.gitignore
+data/urlhaus.csv
+data/urlhaus.db
+__pycache__/
+*.pyc
+*.pyo
+.gaur-tmp/
