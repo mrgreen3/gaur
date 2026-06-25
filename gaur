@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""
+gaur - a safer AUR helper
+"""
+
+import sys
+import argparse
+from lib.triage import triage_package
+from lib.pkgbuild_analysis import analyse_pkgbuild
+from lib.url_check import check_urls
+from lib.diff import review_diff
+from lib.sandbox import build_in_sandbox
+from lib.score import score_package
+from lib.db import GaurDB
+
+VERSION = "0.1.0"
+
+def cmd_install(args, db):
+    pkg = args.package
+    force = args.force_unsafe
+
+    print(f"\n⚙  gaur :: {pkg}\n")
+
+    # Stage 1: AUR metadata triage
+    print("[ 1/5 ] AUR metadata triage...")
+    meta = triage_package(pkg)
+    if meta is None:
+        print(f"  ✗ Package '{pkg}' not found in AUR.")
+        sys.exit(1)
+
+    # Stage 2: Fetch and analyse PKGBUILD
+    print("[ 2/5 ] Fetching and analysing PKGBUILD...")
+    analysis = analyse_pkgbuild(pkg, meta)
+
+    # Stage 3: URL reputation checks
+    print("[ 3/5 ] Checking source URLs...")
+    url_findings = check_urls(meta.get("sources", []))
+
+    # Stage 4: Score and report
+    print("[ 4/5 ] Scoring...\n")
+    risk, findings = score_package(meta, analysis, url_findings)
+    print_report(pkg, risk, findings)
+
+    if risk == "BLOCK" and not force:
+        print("  → Build blocked. Override with --force-unsafe\n")
+        sys.exit(1)
+
+    if risk in ("CAUTION", "BLOCK") and not force:
+        reply = input("  → Proceed? [r]eview / [y]es / [N]o: ").strip().lower()
+        if reply == "r":
+            review_diff(pkg, db)
+        elif reply != "y":
+            print("  Aborted.\n")
+            sys.exit(0)
+    else:
+        review_diff(pkg, db)
+
+    # Stage 5: Sandboxed build
+    print("[ 5/5 ] Building in sandbox...")
+    build_in_sandbox(pkg)
+
+    db.mark_installed(pkg, meta.get("Version"))
+    if force:
+        db.log_force_unsafe(pkg)
+    print(f"\n  ✓ {pkg} installed.\n")
+
+
+def cmd_info(args, db):
+    pkg = args.package
+    print(f"\n⚙  gaur info :: {pkg}\n")
+    meta = triage_package(pkg)
+    if meta is None:
+        print(f"  ✗ Package '{pkg}' not found in AUR.")
+        sys.exit(1)
+    analysis = analyse_pkgbuild(pkg, meta)
+    url_findings = check_urls(meta.get("sources", []))
+    risk, findings = score_package(meta, analysis, url_findings)
+    print_report(pkg, risk, findings)
+    print()
+
+
+def cmd_update(args, db):
+    installed = db.get_installed()
+    if not installed:
+        print("  No AUR packages tracked by gaur.")
+        return
+    for pkg, version in installed.items():
+        print(f"\n── {pkg} (installed: {version})")
+        cmd_install(argparse.Namespace(package=pkg, force_unsafe=False), db)
+
+
+def cmd_search(args, db):
+    from lib.triage import search_aur
+    results = search_aur(args.term)
+    if not results:
+        print(f"  No results for '{args.term}'")
+        return
+    for r in results[:20]:
+        orphan = " [ORPHAN]" if r.get("Maintainer") is None else ""
+        flagged = " [FLAGGED]" if r.get("OutOfDate") else ""
+        print(f"  {r['Name']} {r['Version']}{orphan}{flagged}")
+        if r.get("Description"):
+            print(f"    {r['Description']}")
+
+
+def print_report(pkg, risk, findings):
+    icons = {"BLOCK": "🔴", "CAUTION": "🟡", "OK": "🟢"}
+    labels = {"BLOCK": "HIGH RISK", "CAUTION": "CAUTION", "OK": "OK"}
+    print(f"  {icons[risk]} {pkg} — {labels[risk]}")
+    for f in findings:
+        print(f"  {f}")
+    print()
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="gaur", description="A safer AUR helper")
+    parser.add_argument("--version", action="version", version=f"gaur {VERSION}")
+    sub = parser.add_subparsers(dest="command")
+
+    p_install = sub.add_parser("install", help="Install an AUR package")
+    p_install.add_argument("package")
+    p_install.add_argument("--force-unsafe", action="store_true",
+                           help="Override block (logged)")
+
+    p_info = sub.add_parser("info", help="Show triage report without installing")
+    p_info.add_argument("package")
+
+    sub.add_parser("update", help="Update all gaur-tracked AUR packages")
+
+    p_search = sub.add_parser("search", help="Search the AUR")
+    p_search.add_argument("term")
+
+    args = parser.parse_args()
+    if not args.command:
+        parser.print_help()
+        sys.exit(0)
+
+    db = GaurDB()
+
+    dispatch = {
+        "install": cmd_install,
+        "info": cmd_info,
+        "update": cmd_update,
+        "search": cmd_search,
+    }
+    dispatch[args.command](args, db)
+
+
+if __name__ == "__main__":
+    main()
