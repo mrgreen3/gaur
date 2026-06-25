@@ -1,0 +1,17 @@
+# Blessed packages — pre-reviewed by ArchBang maintainer
+# gaur treats these with reduced friction (still sandboxed, still diffed,
+# but CAUTION threshold is higher and low-vote warnings are suppressed)
+#
+# Format: one package name per line, comments with #
+
+# Common ArchBang staples
+firefox
+chromium
+vlc
+gimp
+libreoffice-still
+git
+base-devel
+xorg-server
+openbox
+tint2
