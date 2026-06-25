@@ -17,7 +17,8 @@ BLOCK_TRIGGERS = [
     "base64 decode-and-exec",
     "pipe to python",
     "URLhaus",
-    "Domain",  # new domain finding
+    "Domain",
+    "orphaned",
 ]
 
 # How many ✗ findings trigger CAUTION vs BLOCK
