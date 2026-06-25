@@ -61,10 +61,30 @@ def fetch_pkgbuild(name: str) -> str | None:
         return None, tmpdir
 
 
+def extract_sources(content: str) -> list:
+    """Parse source URLs from PKGBUILD content. Returns list of source URLs."""
+    sources = []
+    pattern = re.compile(r'source\s*=\s*\((.*?)\)', re.DOTALL | re.IGNORECASE)
+    match = pattern.search(content)
+    if match:
+        source_block = match.group(1)
+        # Extract quoted strings (handles 'url' and "url" syntax)
+        for src in re.findall(r'["\']([^"\']+)["\']', source_block):
+            # PKGBUILD syntax: "name::url" or just "url"
+            if "::" in src:
+                url = src.split("::", 1)[1]
+            else:
+                url = src
+            # Only keep HTTP/HTTPS URLs (skip local files, variables)
+            if url.startswith("http://") or url.startswith("https://"):
+                sources.append(url)
+    return sources
+
+
 def analyse_pkgbuild(name: str, meta: dict) -> dict:
     """
     Fetch and statically analyse the PKGBUILD.
-    Returns dict with 'findings', 'blocked', 'pkgbuild_path', 'clone_dir'.
+    Returns dict with 'findings', 'blocked', 'sources', 'clone_dir'.
     """
     findings = []
     blocked = False
@@ -72,7 +92,10 @@ def analyse_pkgbuild(name: str, meta: dict) -> dict:
     content, clone_dir = fetch_pkgbuild(name)
     if content is None:
         findings.append("✗ Could not fetch PKGBUILD")
-        return {"findings": findings, "blocked": True, "clone_dir": clone_dir}
+        return {"findings": findings, "blocked": True, "sources": [], "clone_dir": clone_dir}
+
+    # Extract sources for URL checking
+    sources = extract_sources(content)
 
     # SKIP checksums — hard block
     if SKIP_PATTERN.search(content):
@@ -101,6 +124,7 @@ def analyse_pkgbuild(name: str, meta: dict) -> dict:
     return {
         "findings": findings,
         "blocked": blocked,
+        "sources": sources,
         "clone_dir": clone_dir,
         "content": content,
     }

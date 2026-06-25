@@ -34,7 +34,7 @@ def cmd_install(args, db):
 
     # Stage 3: URL reputation checks
     print("[ 3/5 ] Checking source URLs...")
-    url_findings = check_urls(meta.get("sources", []))
+    url_findings = check_urls(analysis.get("sources", []))
 
     # Stage 4: Score and report
     print("[ 4/5 ] Scoring...\n")
@@ -73,7 +73,7 @@ def cmd_info(args, db):
         print(f"  ✗ Package '{pkg}' not found in AUR.")
         sys.exit(1)
     analysis = analyse_pkgbuild(pkg, meta)
-    url_findings = check_urls(meta.get("sources", []))
+    url_findings = check_urls(analysis.get("sources", []))
     risk, findings = score_package(meta, analysis, url_findings)
     print_report(pkg, risk, findings)
     print()
