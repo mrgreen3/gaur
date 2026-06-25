@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# update-feeds — refresh local threat intelligence feeds
+# Run daily via cron or systemd timer
+
+set -euo pipefail
+
+DATA_DIR="$(dirname "$0")/data"
+mkdir -p "$DATA_DIR"
+
+URLHAUS_CSV="$DATA_DIR/urlhaus.csv"
+URLHAUS_DB="$DATA_DIR/urlhaus.db"
+
+echo "[ gaur ] Updating URLhaus feed..."
+
+# Download URLhaus online feed (CSV)
+curl -sSL "https://urlhaus.abuse.ch/downloads/csv_online/" \
+  -o "$URLHAUS_CSV.tmp" \
+  --max-time 30
+
+mv "$URLHAUS_CSV.tmp" "$URLHAUS_CSV"
+
+echo "[ gaur ] Building URLhaus SQLite database..."
+
+python3 - <<'EOF'
+import csv
+import sqlite3
+import sys
+import os
+
+data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+csv_path = os.path.join(data_dir, "urlhaus.csv")
+db_path  = os.path.join(data_dir, "urlhaus.db")
+
+conn = sqlite3.connect(db_path)
+conn.execute("DROP TABLE IF EXISTS urls")
+conn.execute("""
+    CREATE TABLE urls (
+        id      INTEGER PRIMARY KEY,
+        url     TEXT,
+        domain  TEXT,
+        status  TEXT
+    )
+""")
+conn.execute("CREATE INDEX IF NOT EXISTS idx_url    ON urls(url)")
+conn.execute("CREATE INDEX IF NOT EXISTS idx_domain ON urls(domain)")
+
+from urllib.parse import urlparse
+import re
+
+count = 0
+with open(csv_path, newline="", encoding="utf-8", errors="replace") as f:
+    for line in f:
+        if line.startswith("#"):
+            continue
+        parts = line.strip().split(",")
+        if len(parts) < 3:
+            continue
+        url = parts[2].strip('"')
+        status = parts[4].strip('"') if len(parts) > 4 else ""
+        try:
+            domain = urlparse(url).netloc.lower()
+        except Exception:
+            domain = ""
+        conn.execute(
+            "INSERT OR IGNORE INTO urls (url, domain, status) VALUES (?, ?, ?)",
+            (url, domain, status)
+        )
+        count += 1
+
+conn.commit()
+conn.close()
+print(f"  Imported {count} URLs into {db_path}")
+EOF
+
+echo "[ gaur ] Feeds updated."
