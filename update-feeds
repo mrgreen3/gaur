@@ -21,13 +21,13 @@ mv "$URLHAUS_CSV.tmp" "$URLHAUS_CSV"
 
 echo "[ gaur ] Building URLhaus SQLite database..."
 
-python3 - <<'EOF'
+python3 - "$DATA_DIR" <<'EOF'
 import csv
 import sqlite3
 import sys
 import os
 
-data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+data_dir = sys.argv[1]
 csv_path = os.path.join(data_dir, "urlhaus.csv")
 db_path  = os.path.join(data_dir, "urlhaus.db")
 

@@ -20,6 +20,22 @@ URLHAUS_DB = Path(__file__).parent.parent / "data" / "urlhaus.db"
 MAX_REDIRECTS = 3
 NEW_DOMAIN_DAYS = 180    # domains younger than this are flagged
 
+# Shared hosting platforms where a domain hit in URLhaus is meaningless —
+# any individual URL on these hosts could be malicious without tainting the domain.
+SHARED_HOSTING_DOMAINS = frozenset({
+    "github.com",
+    "gitlab.com",
+    "raw.githubusercontent.com",
+    "objects.githubusercontent.com",
+    "sourceforge.net",
+    "bitbucket.org",
+    "codeberg.org",
+    "launchpad.net",
+    "drive.google.com",
+    "dropbox.com",
+    "onedrive.live.com",
+})
+
 
 def check_urls(sources: list) -> dict:
     """
@@ -80,12 +96,19 @@ def extract_domain(url: str) -> str:
 
 
 def check_urlhaus(url: str, domain: str) -> bool:
-    """Check URL and domain against local URLhaus SQLite database."""
+    """Check URL and domain against local URLhaus SQLite database.
+
+    For shared hosting platforms only the full URL is matched — domain-level
+    hits are too broad (one malicious file taints the whole host).
+    """
     try:
         conn = sqlite3.connect(URLHAUS_DB)
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM urls WHERE url = ? OR domain = ? LIMIT 1",
-                    (url, domain))
+        if domain in SHARED_HOSTING_DOMAINS:
+            cur.execute("SELECT 1 FROM urls WHERE url = ? LIMIT 1", (url,))
+        else:
+            cur.execute("SELECT 1 FROM urls WHERE url = ? OR domain = ? LIMIT 1",
+                        (url, domain))
         result = cur.fetchone()
         conn.close()
         return result is not None
