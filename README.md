@@ -79,6 +79,24 @@ data/
 - `whois` — for domain age checks
 - `pacman` / `makepkg` — obviously
 
+## Feed updates
+
+URLhaus threat data must be seeded before first use and kept fresh:
+
+```bash
+bash update-feeds        # run once manually to seed
+```
+
+To keep it current automatically, install the systemd user timer from `contrib/`:
+
+```bash
+cp contrib/gaur-update-feeds.{service,timer} ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now gaur-update-feeds.timer
+```
+
+Runs daily. Persistent=true means it catches up on missed runs after sleep/suspend.
+
 ## Status
 
 Early development. Not yet ready for production use.

@@ -1,0 +1,8 @@
+[Unit]
+Description=gaur — refresh URLhaus threat feed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/Projects/gaur/update-feeds
