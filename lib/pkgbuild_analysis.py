@@ -1,8 +1,10 @@
 """
 lib/pkgbuild_analysis.py — Static PKGBUILD analysis
 
-Analyses PKGBUILD content as text BEFORE sourcing/executing it.
-Sourcing a PKGBUILD IS executing it — we never do that.
+Analyses PKGBUILD content as text BEFORE sourcing/executing it. This module
+performs static text analysis only — it does not source the PKGBUILD. Note that
+the later makepkg --verifysource step (in lib/sandbox.py) DOES source the
+PKGBUILD on the host, so the review performed here matters.
 """
 
 import re
@@ -27,7 +29,7 @@ BLOCK_PATTERNS = [
 # Patterns worth flagging but not blocking
 WARN_PATTERNS = [
     (r"\bsudo\b",                        "sudo used inside PKGBUILD"),
-    (r"chmod\s+[0-7]*7[0-7]{2}",        "world-writable chmod detected"),
+    (r"chmod\s+[0-7]{2,3}7(?![0-7])",   "world-writable chmod detected"),
     (r"curl\b",                          "network call (curl) in PKGBUILD body"),
     (r"wget\b",                          "network call (wget) in PKGBUILD body"),
     (r"\$\(curl",                        "command substitution with curl"),
@@ -43,6 +45,34 @@ WARN_PATTERNS = [
 SKIP_PATTERN = re.compile(r"(sha\d+sums|md5sums|b2sums)\s*=\s*\([^)]*'SKIP'", re.DOTALL)
 INSTALL_FILE_PATTERN = re.compile(r"^install\s*=", re.MULTILINE)
 
+_CHECKSUM_ARRAY_PATTERN = re.compile(
+    r'(sha\d+sums|md5sums|b2sums)(?:_[a-zA-Z0-9_]+)?\s*=\s*\(([^)]*)\)',
+    re.DOTALL | re.IGNORECASE,
+)
+_QUOTED_ENTRY_PATTERN = re.compile(r"""['"]([^'"]+)['"]""")
+_VCS_SUFFIXES = ("-git", "-svn", "-hg", "-bzr")
+
+
+def _checksum_skip_status(content: str) -> str:
+    """
+    Inspect checksum arrays and return:
+      'none'    — no SKIP entries present
+      'all'     — every checksum entry across all arrays is SKIP
+      'partial' — mix of SKIP and real checksums
+    """
+    total = 0
+    skip = 0
+    for m in _CHECKSUM_ARRAY_PATTERN.finditer(content):
+        for entry in _QUOTED_ENTRY_PATTERN.findall(m.group(2)):
+            total += 1
+            if entry.strip().upper() == "SKIP":
+                skip += 1
+    if skip == 0:
+        return "none"
+    if total > 0 and skip == total:
+        return "all"
+    return "partial"
+
 
 def fetch_pkgbuild(name: str) -> str | None:
     """Clone the AUR git repo into a temp dir and return PKGBUILD contents."""
@@ -50,7 +80,7 @@ def fetch_pkgbuild(name: str) -> str | None:
     url = f"{AUR_GIT}/{name}.git"
     try:
         subprocess.run(
-            ["git", "clone", "--depth=1", url, tmpdir],
+            ["git", "clone", "--depth=50", url, tmpdir],
             check=True, capture_output=True
         )
         pkgbuild_path = Path(tmpdir) / "PKGBUILD"
@@ -64,9 +94,8 @@ def fetch_pkgbuild(name: str) -> str | None:
 def extract_sources(content: str) -> list:
     """Parse source URLs from PKGBUILD content. Returns list of source URLs."""
     sources = []
-    pattern = re.compile(r'source\s*=\s*\((.*?)\)', re.DOTALL | re.IGNORECASE)
-    match = pattern.search(content)
-    if match:
+    pattern = re.compile(r'\bsource(?:_[a-zA-Z0-9_]+)?\s*=\s*\((.*?)\)', re.DOTALL | re.IGNORECASE)
+    for match in pattern.finditer(content):
         source_block = match.group(1)
         # Extract quoted strings (handles 'url' and "url" syntax)
         for src in re.findall(r'["\']([^"\']+)["\']', source_block):
@@ -97,10 +126,14 @@ def analyse_pkgbuild(name: str, meta: dict) -> dict:
     # Extract sources for URL checking
     sources = extract_sources(content)
 
-    # SKIP checksums — hard block
+    # SKIP checksums — block or warn based on VCS convention
     if SKIP_PATTERN.search(content):
-        findings.append("✗ SKIP checksums — source integrity unverifiable")
-        blocked = True
+        status = _checksum_skip_status(content)
+        if status == "all" and name.endswith(_VCS_SUFFIXES):
+            findings.append("⚠ SKIP checksums (VCS package — expected by convention)")
+        else:
+            findings.append("✗ SKIP checksums — source integrity unverifiable")
+            blocked = True
     else:
         findings.append("✓ Checksums present")
 

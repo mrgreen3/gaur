@@ -11,6 +11,7 @@ Builds AUR packages in a throwaway container:
 import subprocess
 import tempfile
 import os
+import shutil
 from pathlib import Path
 
 
@@ -19,16 +20,22 @@ def build_in_sandbox(pkg: str, clone_dir: str = None):
     Build a package inside a bubblewrap sandbox.
     Network is disabled after source fetch.
     """
-    if clone_dir is None:
+    owns_clone = clone_dir is None
+    if owns_clone:
         clone_dir = _clone_package(pkg)
 
     print(f"  Building {pkg} in sandbox (no network, no home access)...")
 
-    # First fetch sources outside sandbox (makepkg --nobuild just downloads)
-    _fetch_sources(clone_dir)
+    try:
+        # First fetch sources outside sandbox (makepkg --nobuild just downloads)
+        _fetch_sources(clone_dir)
 
-    # Now build with network cut off
-    _bwrap_build(clone_dir, pkg)
+        # Now build with network cut off
+        _bwrap_build(clone_dir, pkg)
+    finally:
+        # Only clean up a clone we created; callers own passed-in dirs.
+        if owns_clone:
+            shutil.rmtree(clone_dir, ignore_errors=True)
 
 
 def _clone_package(pkg: str) -> str:
@@ -42,13 +49,25 @@ def _clone_package(pkg: str) -> str:
 
 
 def _fetch_sources(clone_dir: str):
-    """Download sources using makepkg --verifysource before sandboxing."""
+    """Download and verify sources with makepkg before sandboxing.
+
+    PGP verification is attempted first; if it fails we retry with
+    --skippgpcheck and warn loudly, since many AUR packages ship unsigned
+    sources or keys the user does not carry.
+    """
     result = subprocess.run(
-        ["makepkg", "--verifysource", "--skippgpcheck"],
+        ["makepkg", "--verifysource"],
         cwd=clone_dir,
     )
     if result.returncode != 0:
-        raise RuntimeError("Source fetch/verification failed")
+        print("  ⚠ Source verification failed; retrying with --skippgpcheck "
+              "(PGP signature verification skipped).")
+        result = subprocess.run(
+            ["makepkg", "--verifysource", "--skippgpcheck"],
+            cwd=clone_dir,
+        )
+        if result.returncode != 0:
+            raise RuntimeError("Source fetch/verification failed")
 
 
 def _bwrap_build(clone_dir: str, pkg: str):

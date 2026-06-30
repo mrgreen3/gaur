@@ -31,8 +31,8 @@ def review_diff(pkg: str, db: GaurDB, clone_dir: str = None):
 
     print("\n" + "─" * 60)
 
-    if last_commit is None:
-        # First install — show full PKGBUILD
+    if last_commit is None or not current_commit:
+        # First install (or HEAD unavailable) — show full PKGBUILD
         print(f"  First install of {pkg}. Review full PKGBUILD:\n")
         print(pkgbuild.read_text(errors="replace"))
     elif last_commit == current_commit:
@@ -62,8 +62,11 @@ def review_diff(pkg: str, db: GaurDB, clone_dir: str = None):
     while True:
         reply = input("\n  Mark as reviewed and continue? [y]es / [N]o: ").strip().lower()
         if reply == "y":
-            db.set_reviewed_commit(pkg, current_commit)
-            print(f"  ✓ Commit {current_commit[:8]} marked as reviewed.\n")
+            if current_commit:
+                db.set_reviewed_commit(pkg, current_commit)
+                print(f"  ✓ Commit {current_commit[:8]} marked as reviewed.\n")
+            else:
+                print("  ✓ Reviewed (HEAD unavailable, commit not pinned).\n")
             return
         elif reply in ("n", ""):
             print("  Aborted.\n")
@@ -75,6 +78,8 @@ def get_head_commit(clone_dir: str) -> str:
         ["git", "rev-parse", "HEAD"],
         cwd=clone_dir, capture_output=True, text=True
     )
+    if result.returncode != 0:
+        return ""
     return result.stdout.strip()
 
 

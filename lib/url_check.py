@@ -64,6 +64,8 @@ def check_urls(sources: list) -> dict:
             if hit:
                 findings.append(f"✗ URL/domain flagged in URLhaus feed: {domain}")
                 blocked = True
+                # Do not contact confirmed-malicious infrastructure.
+                continue
             else:
                 findings.append(f"✓ {domain} not in URLhaus feed")
         else:
@@ -116,9 +118,26 @@ def check_urlhaus(url: str, domain: str) -> bool:
         return False
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Disallow urllib from automatically following 3xx responses.
+
+    Returning None from redirect_request makes urllib raise HTTPError for
+    3xx statuses, so the caller can inspect the Location header itself.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
 def count_redirects(url: str) -> int:
-    """Follow redirects with HEAD requests, count hops."""
+    """Follow redirects with HEAD requests, count hops.
+
+    Uses a no-redirect opener so 3xx surfaces as HTTPError; the Location
+    header is read manually and the hop count accumulated in a loop.
+    Returns 0 on no redirect or any error.
+    """
     try:
+        opener = urllib.request.build_opener(_NoRedirectHandler)
         hops = 0
         current = url
         seen = set()
@@ -129,9 +148,6 @@ def count_redirects(url: str) -> int:
             req = urllib.request.Request(current, method="HEAD")
             req.add_header("User-Agent", "gaur/0.1")
             try:
-                opener = urllib.request.build_opener(
-                    urllib.request.HTTPRedirectHandler()
-                )
                 opener.open(req, timeout=8)
                 break
             except urllib.error.HTTPError as e:
@@ -149,17 +165,34 @@ def count_redirects(url: str) -> int:
         return 0
 
 
+_DOMAIN_AGE_CACHE: dict[str, int | None] = {}
+
+
+_MONTH_ABBR = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+
 def get_domain_age_days(domain: str) -> int | None:
     """
     Use whois to estimate domain age in days.
     Returns None if whois is unavailable or parsing fails.
+
+    Results are cached per-domain so repeated source URLs sharing a host
+    do not trigger redundant whois lookups.
     """
+    if domain in _DOMAIN_AGE_CACHE:
+        return _DOMAIN_AGE_CACHE[domain]
+
+    result = None
     try:
-        result = subprocess.run(
+        from datetime import datetime, timezone
+        proc = subprocess.run(
             ["whois", domain],
             capture_output=True, text=True, timeout=10
         )
-        output = result.stdout
+        output = proc.stdout
 
         # Try common WHOIS date field patterns
         patterns = [
@@ -168,19 +201,34 @@ def get_domain_age_days(domain: str) -> int | None:
             r"Registered on:\s*(\d{2}-\w{3}-\d{4})",
         ]
 
-        from datetime import datetime, timezone
         for pattern in patterns:
             match = re.search(pattern, output, re.IGNORECASE)
-            if match:
-                date_str = match.group(1)[:10]  # take YYYY-MM-DD
-                try:
-                    created = datetime.strptime(date_str, "%Y-%m-%d").replace(
-                        tzinfo=timezone.utc
+            if not match:
+                continue
+            date_str = match.group(1)
+            try:
+                if "-" in date_str and len(date_str.split("-")[0]) == 4:
+                    # YYYY-MM-DD or YYYY-MM-DDT...
+                    created = datetime.strptime(
+                        date_str[:10], "%Y-%m-%d"
+                    ).replace(tzinfo=timezone.utc)
+                else:
+                    # DD-Mon-YYYY (e.g. 01-Jan-2020) — parse manually to
+                    # avoid locale-dependent %b behaviour.
+                    day_s, mon_s, year_s = date_str.split("-")
+                    mon = _MONTH_ABBR.get(mon_s)
+                    if mon is None:
+                        continue
+                    created = datetime(
+                        int(year_s), mon, int(day_s), tzinfo=timezone.utc
                     )
-                    now = datetime.now(timezone.utc)
-                    return (now - created).days
-                except ValueError:
-                    continue
-        return None
+                now = datetime.now(timezone.utc)
+                result = (now - created).days
+                break
+            except ValueError:
+                continue
     except Exception:
-        return None
+        result = None
+
+    _DOMAIN_AGE_CACHE[domain] = result
+    return result

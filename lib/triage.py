@@ -18,15 +18,23 @@ MAX_STALE_DAYS = 365          # flag if not updated in this many days
 MAX_FLAGGED_DAYS = 90         # flag if out-of-date for this long
 
 
+class AURUnavailable(Exception):
+    """Raised when the AUR RPC API is unreachable or returns an error."""
+    pass
+
+
 def triage_package(name: str) -> dict | None:
-    """Fetch AUR metadata for a single package. Returns None if not found."""
+    """Fetch AUR metadata for a single package.
+
+    Returns None if the package is not found; raises AURUnavailable on
+    network/API errors (so callers can distinguish the two cases).
+    """
     url = f"{AUR_RPC}/info?arg[]={urllib.parse.quote(name)}"
     try:
         with urllib.request.urlopen(url, timeout=10) as r:
             data = json.loads(r.read())
     except Exception as e:
-        print(f"  ✗ AUR API error: {e}")
-        return None
+        raise AURUnavailable(f"AUR API error: {e}") from e
 
     if data.get("resultcount", 0) == 0:
         return None
