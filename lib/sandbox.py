@@ -48,23 +48,52 @@ def _clone_package(pkg: str) -> str:
     return tmpdir
 
 
+def _bwrap_fetch_cmd(clone_dir: str, extra_args=()) -> list:
+    """bwrap invocation for source fetching — network allowed (sources must
+    download), everything else as locked down as the build sandbox.
+
+    makepkg --verifysource sources the PKGBUILD to learn what to fetch, which
+    means any bash in the file's global scope executes right here — static
+    analysis (lib/pkgbuild_analysis.py) catches known-bad patterns but is
+    trivially bypassable, so this stage must not run on bare host.
+    """
+    return [
+        "bwrap",
+        "--ro-bind", "/usr", "/usr",
+        "--ro-bind", "/etc", "/etc",
+        "--symlink", "usr/lib", "/lib",
+        "--symlink", "usr/lib", "/lib64",
+        "--symlink", "usr/bin", "/bin",
+        "--symlink", "usr/bin", "/sbin",
+        "--proc", "/proc",
+        "--dev", "/dev",
+        "--tmpfs", "/tmp",
+        "--tmpfs", "/home",
+        "--bind", clone_dir, clone_dir,
+        "--chdir", clone_dir,
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--cap-drop", "ALL",
+        "--die-with-parent",
+        "--",
+        "makepkg", "--verifysource", *extra_args,
+    ]
+
+
 def _fetch_sources(clone_dir: str):
-    """Download and verify sources with makepkg before sandboxing.
+    """Download and verify sources with makepkg, sandboxed (see _bwrap_fetch_cmd).
 
     PGP verification is attempted first; if it fails we retry with
     --skippgpcheck and warn loudly, since many AUR packages ship unsigned
     sources or keys the user does not carry.
     """
-    result = subprocess.run(
-        ["makepkg", "--verifysource"],
-        cwd=clone_dir,
-    )
+    result = subprocess.run(_bwrap_fetch_cmd(clone_dir), cwd=clone_dir)
     if result.returncode != 0:
         print("  ⚠ Source verification failed; retrying with --skippgpcheck "
               "(PGP signature verification skipped).")
         result = subprocess.run(
-            ["makepkg", "--verifysource", "--skippgpcheck"],
-            cwd=clone_dir,
+            _bwrap_fetch_cmd(clone_dir, ["--skippgpcheck"]), cwd=clone_dir,
         )
         if result.returncode != 0:
             raise RuntimeError("Source fetch/verification failed")
@@ -96,6 +125,7 @@ def _bwrap_build(clone_dir: str, pkg: str):
         "--unshare-pid",
         "--unshare-ipc",
         "--unshare-uts",
+        "--cap-drop", "ALL",
         "--die-with-parent",
         "--",
         "makepkg", "--noconfirm", "--needed", "--noprogressbar",

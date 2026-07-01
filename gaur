@@ -13,6 +13,7 @@ from lib.diff import review_diff
 from lib.sandbox import build_in_sandbox
 from lib.score import score_package
 from lib.db import GaurDB
+from lib.whitelist import is_whitelisted
 
 VERSION = "0.1.0"
 
@@ -51,7 +52,7 @@ def cmd_install(args, db):
 
     # Stage 4: Score and report
     print("[ 4/5 ] Scoring...\n")
-    risk, findings = score_package(meta, analysis, url_findings)
+    risk, findings = score_package(meta, analysis, url_findings, whitelisted=is_whitelisted(pkg))
     print_report(pkg, risk, findings)
 
     if risk == "BLOCK" and not force:
@@ -95,7 +96,7 @@ def cmd_info(args, db):
         sys.exit(1)
     analysis = analyse_pkgbuild(pkg, meta)
     url_findings = check_urls(analysis.get("sources", []))
-    risk, findings = score_package(meta, analysis, url_findings)
+    risk, findings = score_package(meta, analysis, url_findings, whitelisted=is_whitelisted(pkg))
     print_report(pkg, risk, findings)
     print()
     _cleanup(analysis.get("clone_dir"))
